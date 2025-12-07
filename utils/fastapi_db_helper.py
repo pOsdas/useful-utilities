@@ -1,0 +1,116 @@
+import asyncio
+from typing import AsyncGenerator
+
+from sqlalchemy.ext.asyncio import (
+    create_async_engine,
+    AsyncEngine,
+    async_sessionmaker,
+    AsyncSession
+)
+from sqlalchemy import text
+
+from app.core.config import settings
+
+
+class DatabaseHelper:
+    def __init__(
+            self,
+            url: str,
+            echo: bool = False,
+            echo_pool: bool = False,
+            max_overflow: int = 10,
+            pool_pre_ping: bool = True,
+            pool_recycle: int = 600,
+            pool_size: int = 5,
+    ) -> None:
+        self.engine: AsyncEngine = create_async_engine(
+            url=url,
+            echo=echo,
+            echo_pool=echo_pool,
+            max_overflow=max_overflow,
+            pool_pre_ping=pool_pre_ping,
+            pool_size=pool_size,
+        )
+        self.session_factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
+            bind=self.engine,
+            autoflush=False,
+            autocommit=False,
+            expire_on_commit=False,
+        )
+
+    async def dispose(self) -> None:
+        await self.engine.dispose()
+
+    async def session_getter(self) -> AsyncGenerator[AsyncSession, None]:
+        async with self.session_factory() as session:
+            try:
+                yield session
+            except Exception as e:
+                print(f"Ошибка в сессии: {e}")
+                raise
+
+    async def ping(self) -> bool:
+        try:
+            async with self.engine.connect() as conn:
+                await conn.execute(
+                    text("SELECT 1"),
+                    execution_options={"isolation_level": "AUTOCOMMIT"},
+                )
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    async def create_db_if_not_exists():
+        import asyncpg
+        from urllib.parse import urlparse
+
+        parsed = urlparse(str(settings.db.url))
+        target_db = parsed.path.lstrip("/")
+        user = parsed.username
+        password = parsed.password
+        host = parsed.hostname
+        port = parsed.port or 5432
+
+        for attempt in range(1, 10):
+            try:
+                conn = await asyncpg.connect(
+                    user=user,
+                    password=password,
+                    host=host,
+                    port=port,
+                    database="postgres",
+                )
+
+                exists = await conn.fetch(
+                    "SELECT 1 FROM pg_database WHERE datname = $1;",
+                    target_db
+                )
+
+                if exists:
+                    print(f"База данных '{target_db}' уже существует.")
+                    await conn.close()
+                    return
+
+                print(f"База данных '{target_db}' не найдена. Создаю...")
+                await conn.execute(f"CREATE DATABASE {target_db}")
+                await conn.close()
+                print(f"База '{target_db}' создана успешно.")
+                return
+
+            except Exception as e:
+                print(f"PostgreSQL ещё не готов (попытка {attempt}/10): {e}")
+                await asyncio.sleep(2)
+
+        raise RuntimeError("Не удалось подключиться к PostgreSQL для создания базы данных.")
+
+
+db_helper = DatabaseHelper(
+    url=str(settings.db.url),
+    echo=settings.db.echo,
+    echo_pool=settings.db.echo_pool,
+    pool_size=settings.db.pool_size,
+    pool_pre_ping=settings.db.pool_pre_ping,
+    pool_recycle=settings.db.pool_recycle,
+    max_overflow=settings.db.max_overflow,
+)
