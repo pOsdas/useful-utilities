@@ -26,3 +26,5 @@ Project/
 └── └── code.py       
 ```
 - [ensure_db.py](utils/ensure_db.py) - create db for a django project and automatically apply migrations to it
+- [fastapi_db_helper](utils/fastapi_db_helper.py) - db helper for async FastAPI project
+- [fastapi_db_lifespan](utils/fastapi_db_lifespan.py) - lifespan event for async FastAPi project
